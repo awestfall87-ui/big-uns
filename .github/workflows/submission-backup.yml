@@ -1,0 +1,43 @@
+name: Verified submission backup
+on:
+  schedule:
+    - cron: '17 6 * * *'
+  workflow_dispatch:
+    inputs:
+      alert_test:
+        description: Send a clearly labeled backup alert test only
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: big-uns-submission-backup
+  cancel-in-progress: false
+jobs:
+  backup:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts/backup
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+      - name: Install locked backup dependencies
+        run: npm ci --prefix scripts/backup --no-audit --no-fund
+      - name: Export, verify remote copies, and test record restore
+        if: ${{ !inputs.alert_test }}
+        env:
+          BACKUP_CONFIG_JSON: ${{ secrets.BIG_UNS_BACKUP_CONFIG }}
+          BACKUP_DIR: ${{ runner.temp }}/big-uns-backup
+        run: node scripts/backup/run.mjs
+      - name: Test backup alert delivery
+        if: ${{ inputs.alert_test }}
+        env:
+          BACKUP_CONFIG_JSON: ${{ secrets.BIG_UNS_BACKUP_CONFIG }}
+        run: node scripts/backup/run.mjs --alert-test
+      - name: Remove temporary private exports
+        if: always()
+        run: rm -rf -- "${RUNNER_TEMP}/big-uns-backup"
