@@ -1,0 +1,11 @@
+import {createRequire} from 'node:module';
+import {loadConfig,toolsPackage} from './config.mjs';
+const require=createRequire(toolsPackage);
+const{S3Client,ListObjectsV2Command,DeleteObjectsCommand}=require('@aws-sdk/client-s3');
+const env=await loadConfig();const s3=new S3Client({region:'auto',endpoint:`https://${env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,credentials:{accessKeyId:env.R2_ACCESS_KEY_ID,secretAccessKey:env.R2_SECRET_ACCESS_KEY}});
+const cutoff=Date.now()-89*86400000;let token,removed=0;
+do{const page=await s3.send(new ListObjectsV2Command({Bucket:env.R2_BUCKET,Prefix:'record-exports/',ContinuationToken:token}));
+const old=(page.Contents||[]).filter(o=>o.LastModified&&+o.LastModified<cutoff).map(o=>({Key:o.Key}));
+if(old.length){const result=await s3.send(new DeleteObjectsCommand({Bucket:env.R2_BUCKET,Delete:{Objects:old,Quiet:true}}));if(result.Errors?.length)throw new Error('Backup retention cleanup failed');removed+=old.length;}token=page.IsTruncated?page.NextContinuationToken:undefined;
+}while(token);
+console.log(JSON.stringify({removed,retention_days:90}));

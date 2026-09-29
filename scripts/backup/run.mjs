@@ -34,6 +34,8 @@ try {
     stage='isolated-record-restore';
     const restored=await run('./verify-record-restore.mjs',{BACKUP_PREFIX:exported.remote_prefix});
     if(!exported.remote_readback_verified || !restored.all_record_values_match)throw new Error('Verification incomplete');
+    stage='backup-retention';
+    await run('./prune-old-exports.mjs');
     stage='success-check-in';
     Sentry.captureCheckIn({checkInId,monitorSlug,status:'ok',duration:(Date.now()-started)/1000});
     if(!await Sentry.flush(15000))throw new Error('Monitoring success timeout');

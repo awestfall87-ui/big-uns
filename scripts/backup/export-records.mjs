@@ -13,12 +13,12 @@ const env = await loadConfig();
 for (const name of ['DATABASE_PASSWORD','NEXT_PUBLIC_SUPABASE_URL','SUPABASE_SERVICE_ROLE_KEY','R2_ACCOUNT_ID','R2_BUCKET','R2_ACCESS_KEY_ID','R2_SECRET_ACCESS_KEY','BACKUP_DIR']) {
   if (!env[name]) throw new Error(`Missing ${name}`);
 }
-const tables = ['catch_upload_sessions','catch_submissions','catch_photos','catch_email_outbox','catch_review_history','drop_signups','launch_rate_limits'];
+const tables = ['catch_upload_sessions','catch_submissions','catch_photos','catch_email_outbox','catch_review_history','drop_signups','launch_rate_limits','parental_consents'];
 const db = new Client({host:'aws-0-us-west-2.pooler.supabase.com',port:5432,user:'postgres.bwurlegzpowqyzmfxxjb',database:'postgres',password:env.DATABASE_PASSWORD,ssl:{rejectUnauthorized:true,ca:await fs.readFile(new URL('./supabase-ca.crt',import.meta.url),'utf8')},connectionTimeoutMillis:20000,query_timeout:60000});
 const id = new Date().toISOString().replace(/[:.]/g,'-')+'-'+randomUUID().slice(0,8);
 const dir = path.join(env.BACKUP_DIR,id);
 await fs.mkdir(path.join(dir,'photos'),{recursive:true,mode:0o700});
-const snapshot = {format:'big-uns-records-v1',created_at:new Date().toISOString(),scope:'Seven submission application tables; not a full Supabase database dump',tables:{},columns:{}};
+const snapshot = {format:'big-uns-records-v1',created_at:new Date().toISOString(),scope:'Submission application tables and private parental consent records; not a full Supabase database dump',tables:{},columns:{}};
 await db.connect();
 try {
   await db.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
@@ -36,6 +36,14 @@ async function save(file,bytes,extra={}) {
 }
 await save('records.json',Buffer.from(JSON.stringify(snapshot)));
 await save('submission-schema.sql',await fs.readFile(new URL('./submission-schema.sql',import.meta.url)));
+await save('parental-consent-schema.sql',await fs.readFile(new URL('./parental-consent-schema.sql',import.meta.url)));
+await fs.mkdir(path.join(dir,'consents'),{recursive:true,mode:0o700});
+for(const consent of snapshot.tables.parental_consents){
+ if(!/^[a-f0-9-]+\/signed\.(pdf|png|jpg)$/.test(consent.document_path))throw new Error('Unexpected consent path');
+ const res=await fetch(`${env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/authenticated/parental-consents/${consent.document_path}`,{headers:{apikey:env.SUPABASE_SERVICE_ROLE_KEY,Authorization:`Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`},signal:AbortSignal.timeout(60000)});
+ if(!res.ok)throw new Error('Consent backup download failed');
+ await save('consents/'+consent.document_path.replace('/','__'),Buffer.from(await res.arrayBuffer()),{storage_bucket:'parental-consents',storage_path:consent.document_path});
+}
 const paths = new Set(snapshot.tables.catch_photos.flatMap(p=>[p.original_path,p.preview_path]));
 for (const storagePath of paths) {
   if (!/^[a-f0-9-]+\/(original|preview)-\d+\.(jpg|png|webp)$/.test(storagePath)) throw new Error('Unexpected photo path');

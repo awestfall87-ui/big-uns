@@ -25,11 +25,17 @@ async function verified(file) {
 const records = JSON.parse(await verified('records.json'));
 const schema = await verified('submission-schema.sql');
 const tables = ['catch_upload_sessions','catch_submissions','catch_photos','catch_email_outbox','catch_review_history','drop_signups','launch_rate_limits'];
+if(records.tables.parental_consents)tables.push('parental_consents');
 const db = new PGlite();
 const counts = {};
 try {
   await db.exec('create role anon; create role authenticated; create role service_role bypassrls; create schema storage; create table storage.buckets(id text primary key,name text,public boolean,file_size_limit bigint,allowed_mime_types text[]);');
   await db.exec(schema);
+  if(records.tables.parental_consents){
+    await db.exec(await verified('parental-consent-schema.sql'));
+    // Restore historical rows before their consent references; never used on production.
+    await db.exec('alter table public.catch_submissions disable trigger user');
+  }
   for (const table of tables) {
     const columns = records.columns[table].map(c=>c.column_name);
     if (columns.some(c=>! /^[a-z_]+$/.test(c))) throw new Error('Invalid column');
@@ -42,6 +48,7 @@ try {
     const diff = await db.query(`WITH expected AS (SELECT * FROM jsonb_populate_recordset(NULL::public.${table},$1::jsonb)), differences AS ((SELECT * FROM public.${table} EXCEPT ALL SELECT * FROM expected) UNION ALL (SELECT * FROM expected EXCEPT ALL SELECT * FROM public.${table})) SELECT count(*)::integer AS count FROM differences`,[json]);
     if (diff.rows[0].count!==0) throw new Error('Restored record mismatch');
   }
+  if(records.tables.parental_consents)await db.exec('alter table public.catch_submissions enable trigger user');
   await db.exec("SELECT setval('public.catch_review_history_id_seq',coalesce((SELECT max(id) FROM public.catch_review_history),1),exists(SELECT 1 FROM public.catch_review_history));");
 } finally { await db.close(); }
 const report = {verified_at:new Date().toISOString(),source:'R2 read-back',scope:'Seven application tables restored with their migration, constraints and foreign keys into isolated PGlite',counts,all_record_values_match:true,full_supabase_restore:false};
